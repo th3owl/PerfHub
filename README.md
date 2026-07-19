@@ -861,7 +861,7 @@ Now we’re ready to create the first **memory summary timeline** from all evide
 
 Before CPU/process lifecycle, let’s add a compact conclusion section to your README:
 
-## Memory Case Summary: e64pod-slsm74
+## Memory Case Summary: NODE-4
 
 ### Current Snapshot
 
