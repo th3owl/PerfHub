@@ -155,10 +155,222 @@ Dirty pages currently being written to disk.
 - No dirty/writeback pressure
 - Top process RSS does not explain total used memory by itself
   
-### Next Step
-Continue with memory investigation:
+### Step 4: Memory Usage By OS User
+Command:
+
 ```
 ps -eo user=,rss= | awk '{mem[$1]+=$2} END {for (u in mem) printf "%-20s %.2f GiB\n", u, mem[u]/1024/1024}' | sort -k2 -nr
 ```
-- This gives a rough RSS total by OS user.
-- Caution: on database nodes, this can overcount shared memory mappings, so it must be interpreted carefully.
+#### Sample output:
+```
+oracle               287.47 GiB
+root                 11.04 GiB
+grid                 9.30 GiB
+exawatch             0.05 GiB
+opc                  0.02 GiB
+polkitd              0.01 GiB
+dbmsvc               0.01 GiB
+```
+#### Observation:
+- Most visible process RSS belongs to the oracle user. The root user is mainly explained by the Logstash Java process seen earlier. The grid user has a smaller but still visible memory footprint.
+#### Interpretation:
+- This command gives a rough RSS total by OS user. It is useful for identifying ownership, but it is not final memory accounting.
+- On database nodes, RSS-by-user can overcount shared memory mappings. Oracle processes may map the same large SGA/shared memory area, so blindly summing RSS can produce misleading totals.
+#### Expert note:
+Use this command to identify direction:
+- Who should I investigate first?
+Do not use it alone to conclude:
+- Who physically owns every GiB of RAM?
+
+### Step 5: Deep Dive Into One Process
+
+Command:
+
+```
+cat /proc/388791/status
+```
+#### Important output:
+```
+Name:       java
+State:      S (sleeping)
+VmSize:     71452208 kB
+VmRSS:       9758508 kB
+RssAnon:     9726252 kB
+RssFile:       32256 kB
+RssShmem:          0 kB
+VmSwap:          432 kB
+Threads:         879
+HugetlbPages:      0 kB
+````
+#### Interpretation:
+- This Java process uses about 9.3 GiB of real RAM. Almost all of it is anonymous memory, which usually means heap/private process memory.
+- The process has very little file-backed RSS, no shared RSS, and almost no swap usage.
+- Because the Java command line showed -Xms8192m -Xmx8192m, this memory footprint is expected: 8 GiB Java heap plus JVM/native overhead.
+#### Expert note:
+- For a single process, /proc/<pid>/status is better than plain ps because it separates:
+```
+VmRSS    = total resident memory
+RssAnon  = private/anonymous memory
+RssFile  = file-backed memory
+RssShmem = shared memory
+VmSwap   = swapped memory
+```
+### Step 6: Deep Dive Into A Database Process
+
+Command:
+
+```
+cat /proc/359597/status
+```
+#### Important output:
+```
+Name:         ora_ipc0_em71po
+State:        S (sleeping)
+VmSize:       616994908 kB
+VmRSS:          6399768 kB
+RssAnon:          30716 kB
+RssFile:          77596 kB
+RssShmem:       6291456 kB
+VmSwap:               0 kB
+HugetlbPages:  591718400 kB
+Threads:              1
+```
+#### Interpretation:
+- This Oracle process has a very large virtual memory size because it maps a large shared memory / SGA region.
+- Its resident memory is around 6.1 GiB, but almost all of that is shared memory:
+```
+RssShmem: ~6.0 GiB
+RssAnon : ~30 MiB
+```
+- The process also maps around 564 GiB of HugePages:
+```
+HugetlbPages: ~564 GiB
+```
+- This means the process privately owns very little normal memory. Its large memory footprint is mainly due to database shared memory mappings.
+#### Expert note:
+For database processes, plain RSS and VSZ can be misleading.
+Use /proc/<pid>/status to separate:
+```
+RssAnon      = private process memory
+RssShmem     = shared memory
+HugetlbPages = huge page backed database memory
+VmSwap       = swapped memory
+````
+#### Conclusion:
+Do not add RSS across many Oracle processes to calculate total Oracle memory. Many processes may map the same shared memory region.
+
+### Step 7: Process Memory Map Summary
+
+Command:
+
+```
+cat /proc/359597/smaps_rollup
+```
+#### Important output:
+```
+Rss:             6400008 kB
+Pss:             4577238 kB
+Pss_Anon:          30956 kB
+Pss_File:            241 kB
+Pss_Shmem:       4546041 kB
+Shared_Hugetlb: 565311488 kB
+Private_Hugetlb: 44216320 kB
+Swap:                  0 kB
+```
+#### Interpretation:
+- smaps_rollup gives a summarized memory-map view for one process.
+#### Important terms:
+- `RSS`
+Resident memory mapped by the process.
+- `PSS`
+Proportional memory attributed to the process. If memory is shared, each process gets only its fair share.
+- `Pss_Anon`
+Proportional anonymous/private memory.
+- `Pss_File`
+Proportional file-backed memory.
+- `Pss_Shmem`
+Proportional shared memory.
+- `Shared_Hugetlb`
+HugePages-backed memory shared with other processes.
+- `Private_Hugetlb`
+HugePages-backed memory private to this process mapping.
+- `Swap`
+Memory from this process currently swapped out.
+#### Conclusion:
+This Oracle process is not a private memory-heavy process. It is attached to a very large HugePages-backed database memory area. Swap is zero for this process.
+
+### Step 8: Live Memory Pressure Check
+
+Command:
+
+```
+vmstat 1 5
+```
+#### Sample output:
+```
+procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+102  0 249732 485676640 566696 146695712    0    0    31     2    0    0 33  5 61  0  0
+107  1 249732 484387808 566696 146696560    0    0 19544  9651 617776 421713 37  6 56  0  0
+89   0 249732 482358432 566696 146696688    0    0 22280    38 558897 377153 35  5 59  0  0
+121  1 249732 481530464 566696 146696992    0    0 21620   948 580718 386897 36  5 58  0  0
+115  1 249732 481183776 566696 146697008    0    0 20060     9 610101 427377 36  6 58  0  0
+```
+#### Important fields:
+- `swpd`
+Amount of swap currently allocated.
+- `si`
+Swap-in rate. Memory being read back from swap.
+- `so`
+Swap-out rate. Memory being pushed to swap.
+- `free`
+Free memory at the moment.
+- `b`
+Blocked processes, often waiting on I/O.
+- `wa`
+CPU time spent waiting on I/O.
+
+#### Interpretation:
+- The node has around 244 MiB swap allocated, but si and so are zero. This means the node is not actively swapping.
+- Free memory remains very high, around 481-485 GiB. I/O wait is zero. There is no live memory pressure visible in this sample.
+#### Expert note:
+Swap used is historical/current allocation. Active memory pressure is better identified by non-zero si/so, falling MemAvailable, OOM messages, and reclaim/writeback symptoms.
+
+### Concept: Run Queue
+
+In `vmstat`, the `r` column shows the run queue.
+
+It means the number of tasks that are runnable: either currently running on CPU or ready to run and waiting for CPU.
+
+Example:
+
+```
+procs
+ r  b
+102 0
+```
+- r = 102 means 102 tasks are runnable.
+This must be compared with CPU count.
+Rule of thumb:
+```
+r <= CPU count      usually acceptable
+r > CPU count       possible CPU queueing
+r >> CPU count      CPU saturation likely
+```
+- A high r value on a small 8-core system may be serious. The same r value on a 252-CPU system may be normal.
+Always compare r with:
+```
+id = CPU idle percentage
+wa = I/O wait
+b  = blocked tasks
+```
+In the sample:
+```
+r  = 89-121
+id = 56-61%
+wa = 0%
+b  = 0-1
+```
+#### Interpretation:
+The node is busy, but not CPU saturated. There is also no evidence of I/O blocking in this sample.
+
