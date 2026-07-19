@@ -374,3 +374,542 @@ b  = 0-1
 #### Interpretation:
 The node is busy, but not CPU saturated. There is also no evidence of I/O blocking in this sample.
 
+### Step 9: OOM History Check
+
+Command:
+
+```
+dmesg -T | grep -Ei 'out of memory|oom|killed process'
+```
+Sample findings:
+```
+[Mon Mar  2 15:11:24 2026] Out of memory: Killed process 95755 (java)
+[Mon Mar  2 15:11:35 2026] Out of memory: Killed process 95802 (ohasd.bin)
+[Mon Mar  2 15:11:36 2026] Out of memory: Killed process 96315 (orarootagent.bi)
+[Mon Mar  2 15:11:37 2026] Out of memory: Killed process 56756 (oracle_56756_em)
+[Thu Apr 30 23:58:47 2026] Out of memory: Killed process 288139 (java)
+[Thu May 21 02:39:39 2026] Memory cgroup out of memory: Killed process 55552 (exadata-dbproc-)
+```
+#### Interpretation:
+- The current memory snapshot is healthy, but kernel logs confirm historical OOM events.
+There are two different OOM types:
+`global_oom` : The full node was under memory pressure.
+`CONSTRAINT_MEMCG` : Memory cgroup out of memory. A specific service or cgroup hit its memory limit. This does not always mean the whole node was out of RAM.
+#### Expert note:
+- Always separate current memory health from historical memory events.
+- A node can look healthy now but still have had serious OOM kills earlier.
+
+#### Current expert conclusion:
+
+- The node is not memory-stressed now, but it has a history of real OOM events.
+- March 2 was a global OOM sequence.
+- April 30 was another global OOM killing Logstash Java.
+- May 21 was a memory cgroup OOM, scoped to exadata-dbproc-bind.service.
+
+### Step 10: OOM Context Analysis
+
+Command:
+
+```
+dmesg -T | grep -Ei -A40 -B20 'Out of memory: Killed process 95755|oom-kill:constraint=CONSTRAINT_NONE'
+```
+#### Important evidence:
+```
+oom-kill:constraint=CONSTRAINT_NONE ... global_oom
+```
+#### Interpretation:
+`global_oom` means the full node was under memory pressure. This is different from a memory cgroup OOM, where only one service or container hits its configured memory limit.
+Example OOM victims:
+```
+2026-03-02 15:11:24 java from logstash.service
+2026-03-02 15:11:35 ohasd.bin from oracle-ohasd.service
+2026-03-02 15:11:36 orarootagent.bin from oracle-ohasd.service
+```
+Important Mem-Info fields:
+```
+active_anon:197065649
+inactive_anon:3219910
+active_file:3486
+inactive_file:5665
+free:2169681
+```
+Approximate conversion using 4 KiB pages:
+```
+active_anon   ~751 GiB
+inactive_anon ~12 GiB
+free          ~8.3 GiB
+file cache    nearly depleted
+```
+#### Conclusion:
+At the time of OOM, memory was dominated by anonymous memory. File cache was almost gone and free memory was very low. This is a true global memory exhaustion event.
+#### Expert note:
+The OOM victim is not always the root cause. The kernel chooses victims using OOM score, memory usage, cgroup context, and oom_score_adj.
+Processes with:
+```
+oom_score_adj=-1000
+```
+are strongly protected from OOM killing.
+
+### Concept: cgroup
+
+`cgroup` means control group.
+
+A cgroup is a Linux kernel mechanism for grouping processes together and applying resource accounting or limits to that group.
+
+Cgroups can control or account for:
+
+```
+CPU
+memory
+I/O
+process count
+devices
+```
+Under systemd, services usually run inside cgroups.
+Example:
+```
+/system.slice/logstash.service
+/system.slice/oracle-ohasd.service
+```
+If a process belongs to /system.slice/logstash.service, Linux can track resource usage for the whole Logstash service, not just one PID.
+Important OOM distinction:
+`global_oom`
+The full node is out of allocatable memory.
+`Memory cgroup out of memory`
+A specific cgroup hit its memory limit. The whole node may still have available RAM.
+Useful commands:
+```
+cat /proc/<pid>/cgroup
+systemctl status <service>
+systemctl show <service> | grep -Ei 'Memory|CPU|Tasks'
+```
+For cgroup v1:
+```
+cat /sys/fs/cgroup/memory/system.slice/<service>/memory.limit_in_bytes
+cat /sys/fs/cgroup/memory/system.slice/<service>/memory.usage_in_bytes
+```
+For cgroup v2:
+```
+cat /sys/fs/cgroup/system.slice/<service>/memory.max
+cat /sys/fs/cgroup/system.slice/<service>/memory.current
+cat /sys/fs/cgroup/system.slice/<service>/memory.events
+```
+#### Expert note:
+Cgroups let us separate node-level resource exhaustion from service-level resource limits.
+
+### Step 11: OOM Score And OOM Protection
+
+Command:
+
+```
+for p in 388791 359597; do echo "PID=$p $(tr '\0' ' ' < /proc/$p/cmdline | cut -c1-120)"; cat /proc/$p/oom_score /proc/$p/oom_score_adj; done
+```
+Sample output:
+```
+PID=388791 /usr/lib/jvm/jdk-11-oracle-x64/bin/java -Xms8192m -Xmx8192m ...
+670
+0
+
+PID=359597 ora_ipc0_em71pod6
+0
+-1000
+```
+#### Interpretation:
+`oom_score` is the kernel's current score for selecting a process as an OOM victim. Higher means more likely to be killed.
+`oom_score_adj` modifies the process's OOM risk.
+Common values:
+```
+-1000 = strongly protected from OOM killing
+0     = normal
+1000  = very likely to be killed
+```
+In this sample:
+- java/logstash has oom_score 670 and oom_score_adj 0
+- Oracle ipc0 has oom_score 0 and oom_score_adj -1000
+
+#### Conclusion:
+Java/logstash is much more likely to be killed during OOM than the protected Oracle background process.
+
+### Step 12: Process cgroup Membership
+
+Command:
+
+```
+for p in 388791 359597; do echo "### PID $p"; cat /proc/$p/cgroup; done
+```
+Sample output summary:
+```
+PID 388791 java/logstash:
+memory:/system.slice/logstash.service
+cpu,cpuacct:/system.slice/logstash.service
+name=systemd:/system.slice/logstash.service
+
+PID 359597 ora_ipc0:
+memory:/user.slice/user-1001.slice/session-302219.scope
+name=systemd:/system.slice/oracle-ohasd.service
+```
+#### Interpretation:
+The node is using cgroup v1 because /proc/<pid>/cgroup shows numbered controllers such as:
+```
+11:memory:
+5:cpu,cpuacct:
+1:name=systemd:
+```
+For Logstash, memory and systemd service accounting are aligned under:
+```
+/system.slice/logstash.service
+```
+For the Oracle process, systemd service identity and memory accounting differ:
+```
+memory controller: /user.slice/user-1001.slice/session-302219.scope
+systemd identity : /system.slice/oracle-ohasd.service
+```
+#### Expert note:
+When checking cgroup memory usage or limits, use the path shown for the memory controller, not necessarily the name=systemd path.
+
+### Step 13: cgroup Memory Usage For A Service
+
+Command:
+
+```
+cg=/sys/fs/cgroup/memory/system.slice/logstash.service
+for f in memory.usage_in_bytes memory.max_usage_in_bytes memory.limit_in_bytes memory.failcnt memory.oom_control; do echo "### $f"; cat "$cg/$f"; done
+```
+Sample output:
+```
+memory.usage_in_bytes
+10168766464
+
+memory.max_usage_in_bytes
+10183327744
+
+memory.limit_in_bytes
+9223372036854771712
+
+memory.failcnt
+0
+
+memory.oom_control
+oom_kill_disable 0
+under_oom 0
+oom_kill 0
+```
+#### Interpretation:
+The Logstash cgroup is currently using about 9.47 GiB of memory, with a peak around 9.49 GiB.
+The memory limit value is extremely large:
+```
+9223372036854771712
+```
+This effectively means no practical cgroup memory limit.
+`memory.failcnt = 0` means the cgroup has not hit its memory limit.
+`under_oom = 0` means the cgroup is not currently under OOM.
+`oom_kill = 0` means no cgroup OOM kill is recorded for this cgroup.
+#### Conclusion:
+Logstash is not currently memory-limited by cgroups. Historical Logstash kills were global OOM victim selections, not cgroup-limit kills.
+
+### Step 14: cgroup Memory Usage For Oracle Session Scope
+
+Command:
+
+```
+cg=/sys/fs/cgroup/memory/user.slice/user-1001.slice/session-302219.scope
+for f in memory.usage_in_bytes memory.max_usage_in_bytes memory.limit_in_bytes memory.failcnt memory.oom_control; do echo "### $f"; cat "$cg/$f"; done
+```
+Sample output:
+```
+memory.usage_in_bytes
+300013641728
+
+memory.max_usage_in_bytes
+797888757760
+
+memory.limit_in_bytes
+9223372036854771712
+
+memory.failcnt
+0
+
+memory.oom_control
+oom_kill_disable 0
+under_oom 0
+oom_kill 0
+```
+#### Interpretation:
+- The Oracle/session memory cgroup currently accounts for about 279 GiB.
+- Its recorded peak is about 743 GiB.
+- There is no practical cgroup memory limit, and no cgroup OOM is currently recorded.
+#### Expert note:
+`memory.max_usage_in_bytes` is useful because it preserves the peak usage since the cgroup was created. However, it does not include the timestamp of that peak.
+#### Conclusion:
+The Oracle/session cgroup had a much higher historical memory footprint than it has now. This may relate to the historical global OOM, but timing must be proven with time-series logs or other timestamped evidence.
+
+### Step 15: Memory Pressure Stall Information
+
+Command:
+
+```
+cat /proc/pressure/memory
+```
+Sample output:
+```
+cat: /proc/pressure/memory: Operation not supported
+```
+#### Interpretation:
+- Pressure Stall Information, also called PSI, is not available on this node.
+- If available, PSI can show whether workloads are being delayed because of memory pressure.
+- Example PSI output would look like:
+```
+some avg10=0.00 avg60=0.00 avg300=0.00 total=...
+full avg10=0.00 avg60=0.00 avg300=0.00 total=...
+```
+- Meaning:
+`some`
+At least one task was stalled due to memory pressure.
+`full`
+All non-idle tasks were stalled due to memory pressure.
+#### Conclusion:
+Since PSI is not supported here, memory pressure must be inferred from other built-in evidence: MemAvailable, swap activity, OOM logs, cgroup counters, and time-series collection.
+
+### Step 16: Kernel Memory And Slab
+
+Command:
+
+```
+grep -E 'Slab|SReclaimable|SUnreclaim|KernelStack|PageTables|Vmalloc|Percpu' /proc/meminfo
+```
+Sample output:
+```
+Slab:           13412640 kB
+SReclaimable:    9415576 kB
+SUnreclaim:      3997064 kB
+KernelStack:      110800 kB
+PageTables:      1425616 kB
+VmallocUsed:     1077288 kB
+Percpu:          2158592 kB
+```
+#### Interpretation:
+Kernel memory is not the main memory consumer on this node.
+Approximate sizes:
+```
+Slab         ~12.8 GiB
+SReclaimable ~9.0 GiB
+SUnreclaim   ~3.8 GiB
+KernelStack  ~108 MiB
+PageTables   ~1.36 GiB
+Percpu       ~2.06 GiB
+VmallocUsed  ~1.03 GiB
+```
+Most slab memory is reclaimable. Unreclaimable slab is relatively small compared with the node size.
+#### Conclusion:
+Kernel memory does not explain the large used memory. The larger consumers remain HugePages, anonymous memory, and file cache.
+
+### Step 18: Corrected Top Slab Consumers
+
+Command:
+
+```
+awk 'NR>2 {mb=($2*$4)/1024/1024; printf "%12.2f MB  %-32s objects=%-12s active=%-12s objsize=%s\n", mb,$1,$2,$3,$4}' /proc/slabinfo | sort -nr | head -20
+```
+Sample output:
+```
+2776.66 MB  buffer_head
+2710.05 MB  proc_inode_cache
+1036.56 MB  dentry
+ 775.23 MB  radix_tree_node
+ 767.22 MB  ext4_inode_cache
+ 649.84 MB  kmalloc-512
+```
+#### Interpretation:
+The largest slab consumers are mostly filesystem and kernel metadata caches.
+##### Important terms:
+- `buffer_head`
+Block/filesystem buffer metadata.
+- `proc_inode_cache`
+Kernel inode cache for /proc entries.
+- `dentry`
+Directory entry cache used for pathname lookups.
+- `radix_tree_node`
+Kernel metadata structure often associated with cached pages or filesystem mappings.
+- `ext4_inode_cache`
+Inode cache for ext4 filesystems.
+#### Conclusion:
+The slab footprint does not suggest kernel memory is the primary memory problem. It is modest for a 1.3 TiB node and mostly made of expected filesystem/proc metadata.
+
+### Step 19: HugePages Usage
+
+Command:
+
+```
+grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|HugePages_Surp|Hugepagesize|Hugetlb' /proc/meminfo
+```
+Sample output:
+```
+HugePages_Total:   297989
+HugePages_Free:      355
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:       2048 kB
+Hugetlb:        610281472 kB
+```
+Calculation:
+```
+Total HugePages memory
+= HugePages_Total * Hugepagesize
+= 297989 * 2 MiB
+= ~582.0 GiB
+```
+Free HugePages memory
+```
+= HugePages_Free * Hugepagesize
+= 355 * 2 MiB
+= ~0.69 GiB
+```
+Used HugePages memory
+```
+= (HugePages_Total - HugePages_Free) * Hugepagesize
+= 297634 * 2 MiB
+= ~581.3 GiB
+```
+#### Interpretation:
+- Almost the entire HugePages pool is in use.
+- On database nodes, this is commonly expected because databases such as Oracle use HugePages for SGA/shared memory.
+#### Expert note:
+HugePages must be analyzed separately from normal process RSS. A database process can map hundreds of GiB of HugePages while showing much smaller private memory in /proc/<pid>/status.
+
+### Step 20: Transparent HugePages
+
+Command:
+
+```
+cat /sys/kernel/mm/transparent_hugepage/enabled
+cat /sys/kernel/mm/transparent_hugepage/defrag
+```
+Sample output:
+```
+always madvise [never]
+always defer defer+madvise [madvise] never
+```
+#### Interpretation:
+- The active value is shown inside brackets.
+- Transparent HugePages enabled = never
+- Transparent HugePages defrag  = madvise
+- This means Transparent HugePages are disabled for automatic use.
+#### Important distinction:
+- HugeTLB / static HugePages
+- Preconfigured huge page pool. Shown in /proc/meminfo using fields such as HugePages_Total, HugePages_Free, and Hugetlb.
+- Transparent HugePages / THP
+- Kernel-managed automatic huge pages for normal memory. Controlled under /sys/kernel/mm/transparent_hugepage.
+#### Conclusion:
+This node uses static HugePages heavily, while Transparent HugePages are disabled. This is a common and usually preferred database-node configuration.
+
+### Step 21: Swap Configuration And Usage
+
+Command:
+
+```
+swapon --show
+grep -E 'SwapTotal|SwapFree|SwapCached' /proc/meminfo
+```
+Sample output:
+```
+NAME      TYPE      SIZE   USED PRIO
+/dev/dm-9 partition  16G 243.9M   -2
+
+SwapCached:        13236 kB
+SwapTotal:      16777212 kB
+SwapFree:       16527480 kB
+```
+### Interpretation:
+- Swap is configured on /dev/dm-9.
+- Swap usage is about 244 MiB out of 16 GiB, which is tiny for a 1.3 TiB node.
+- SwapCached is also small, around 13 MiB.
+- Earlier vmstat showed:
+```
+si = 0
+so = 0
+```
+- So the node is not actively swapping.
+#### Expert note:
+Do not treat small swap usage alone as active memory pressure. Active pressure is better shown by non-zero si and so in vmstat, falling MemAvailable, reclaim stalls, or OOM events.
+
+### Step 22: Dirty And Writeback Memory
+
+Command:
+
+```
+grep -E 'Dirty|Writeback|NFS_Unstable|Bounce|WritebackTmp' /proc/meminfo
+```
+Sample output:
+```
+Dirty:               536 kB
+Writeback:             0 kB
+NFS_Unstable:          0 kB
+Bounce:                0 kB
+WritebackTmp:          0 kB
+```
+#### Interpretation:
+- There is no writeback pressure in the current snapshot.
+- `Dirty` is memory that has been modified but not yet written to disk.
+- `Writeback` is dirty memory currently being written to disk.
+- If `Dirty` and `Writeback` are high during memory pressure, reclaim can become slow because pages must be written before they can be freed.
+#### Conclusion:
+Current memory reclaim is not blocked by dirty page writeback.
+
+# SUMMARY
+
+Now we’re ready to create the first **memory summary timeline** from all evidence.
+
+Before CPU/process lifecycle, let’s add a compact conclusion section to your README:
+
+## Memory Case Summary: e64pod-slsm74
+
+### Current Snapshot
+
+The node is busy but not under active memory pressure.
+
+Evidence:
+
+```
+MemAvailable: ~575 GiB
+Swap used: ~244 MiB
+vmstat si/so: 0/0
+Dirty: ~536 kB
+Writeback: 0
+CPU iowait: 0
+Current Memory Attribution
+Approximate memory classes:
+HugePages used        ~581 GiB
+Oracle/session memory ~279 GiB current cgroup usage
+Oracle visible RSS    ~287 GiB by user-level RSS rollup
+Logstash memory       ~9.5 GiB cgroup usage
+File cache            ~131-139 GiB
+Kernel slab           ~12.8 GiB
+```
+## Historical OOM Evidence
+Kernel logs show historical OOM events.
+Important events:
+```
+2026-03-02 15:11:24 global OOM killed java/logstash
+2026-03-02 15:11:35 global OOM killed ohasd.bin
+2026-03-02 15:11:36 global OOM killed orarootagent.bin
+2026-04-30 23:58:47 global OOM killed java/logstash
+2026-05-21 02:39:39 memory cgroup OOM killed exadata-dbproc
+```
+## March 2 OOM Interpretation
+The March 2 event was a true node-level OOM:
+```
+oom-kill:constraint=CONSTRAINT_NONE ... global_oom
+```
+Kernel `Mem-Info` showed memory dominated by anonymous memory:
+```
+active_anon   ~751 GiB
+inactive_anon ~12 GiB
+file cache    nearly depleted
+free memory   ~8.3 GiB
+```
+This is very different from the current healthy snapshot.
+## Final Memory Conclusion
+- The node is currently healthy from a memory perspective, but it has a history of serious OOM events.
+- The current memory footprint is mostly explained by database HugePages/shared memory, Oracle process memory, and file cache.
+- The historical March 2 OOM appears to have been driven by anonymous memory exhaustion, not kernel slab growth, dirty writeback, or active swap pressure in the current snapshot.
+- The killed process should not automatically be treated as the root cause. Logstash Java was killable because it had normal OOM protection, while many Oracle processes had `oom_score_adj=-1000`.
