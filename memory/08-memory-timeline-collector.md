@@ -56,3 +56,81 @@ This is very different from the current healthy snapshot.
 - The current memory footprint is mostly explained by database HugePages/shared memory, Oracle process memory, and file cache.
 - The historical March 2 OOM appears to have been driven by anonymous memory exhaustion, not kernel slab growth, dirty writeback, or active swap pressure in the current snapshot.
 - The killed process should not automatically be treated as the root cause. Logstash Java was killable because it had normal OOM protection, while many Oracle processes had `oom_score_adj=-1000`.
+
+# Memory Timeline Collector
+
+## Why Timeline Collection Is Needed
+
+A current snapshot can explain the node now. Kernel logs can prove selected historical events such as OOM kills. But exact memory spike timing requires timestamped samples collected before or during the spike.
+
+Without timestamped samples, we can infer from logs and current counters, but we cannot reconstruct exact per-minute process RSS retroactively.
+
+## What The Timeline Should Capture
+
+```
+Timestamp
+Node memory classes
+Top process RSS
+Memory by OS user
+Swap activity
+Dirty/writeback state
+HugePages state
+Important cgroup memory counters
+Recent OOM events
+```
+
+## Manual Snapshot
+
+Use this when taking a one-time evidence sample.
+
+```
+date '+%F %T'
+free -wh
+grep -E 'MemTotal|MemFree|MemAvailable|Buffers|Cached|SwapTotal|SwapFree|SwapCached|Active|Inactive|AnonPages|Mapped|Shmem|Slab|SReclaimable|SUnreclaim|Dirty|Writeback|PageTables|KernelStack|HugePages_Total|HugePages_Free|Hugepagesize|Hugetlb' /proc/meminfo
+ps -eo pid,ppid,user,comm,%mem,rss,vsz,etime,args --sort=-rss | head -15
+vmstat 1 2
+```
+
+## Loop Collector
+
+This collects one sample every 60 seconds.
+
+```
+while true; do
+  echo "===== $(date '+%F %T') ====="
+  echo "### free"
+  free -wh
+  echo "### meminfo"
+  grep -E 'MemTotal|MemFree|MemAvailable|Buffers|Cached|SwapTotal|SwapFree|SwapCached|Active|Inactive|AnonPages|Mapped|Shmem|Slab|SReclaimable|SUnreclaim|Dirty|Writeback|PageTables|KernelStack|HugePages_Total|HugePages_Free|Hugepagesize|Hugetlb' /proc/meminfo
+  echo "### top rss processes"
+  ps -eo pid,ppid,user,comm,%mem,rss,vsz,etime,args --sort=-rss | head -15
+  echo "### memory by user"
+  ps -eo user=,rss= | awk '{mem[$1]+=$2} END {for (u in mem) printf "%-20s %.2f GiB\n", u, mem[u]/1024/1024}' | sort -k2 -nr
+  echo "### vmstat"
+  vmstat 1 2 | tail -1
+  echo
+  sleep 60
+done >> /tmp/memory_timeline.log
+```
+
+## Spike Classification
+
+| Evidence | Likely Meaning |
+|---|---|
+| `MemAvailable` falling | Node has less allocatable memory |
+| `AnonPages` rising | Application/private memory growth |
+| `Cached` rising | File cache growth |
+| `Cached` falling sharply | Kernel is reclaiming file cache |
+| `SUnreclaim` rising | Kernel unreclaimable slab growth |
+| `HugePages_Free` falling | HugePages consumption increased |
+| `si`/`so` non-zero in `vmstat` | Active swap activity |
+| `Dirty` rising | Data waiting to be written to disk |
+| `Writeback` rising | Dirty pages being flushed to disk |
+| OOM messages in `dmesg` | Kernel killed process due to memory exhaustion |
+| cgroup `failcnt` rising | cgroup memory limit was hit |
+| cgroup `oom_kill` rising | cgroup OOM killed a process |
+
+## Key Takeaway
+
+For future incidents, start the collector early. It turns memory analysis from a snapshot exercise into a timeline investigation.
+
