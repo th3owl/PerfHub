@@ -35,10 +35,10 @@ Node: NODE-4
 Memory: 1.3 TiB
 Workload type: database node
 ```
-### Summary:
-Current state: busy but not under active memory pressure
-Historical state: confirmed global OOM events and one cgroup OOM event
-Primary current memory footprint: HugePages/database shared memory
+## Summary
+- Current state: busy but not under active memory pressure
+- Historical state: confirmed global OOM events and one cgroup OOM event
+- Primary current memory footprint: HugePages/database shared memory
 
 ## Chapter Files
 
