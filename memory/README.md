@@ -39,3 +39,14 @@ Workload type: database node
 Current state: busy but not under active memory pressure
 Historical state: confirmed global OOM events and one cgroup OOM event
 Primary current memory footprint: HugePages/database shared memory
+
+## Chapter Files
+
+- [01 - Current Memory Snapshot](01-current-memory-snapshot.md)
+- [02 - Process Memory Analysis](02-process-memory-analysis.md)
+- [03 - Process Memory Map Summary](03-process-memory-map-summary.md)
+- [04 - Live Memory Pressure](04-live-memory-pressure.md)
+- [05 - OOM Analysis](05-oom-analysis.md)
+- [06 - cgroup Memory Analysis](06-cgroup-memory-analysis.md)
+- [07 - Kernel Slab, HugePages, Swap](07-kernel-slab-hugepages-swap.md)
+- [08 - Memory Timeline Collector](08-memory-timeline-collector.md)
