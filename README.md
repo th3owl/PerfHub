@@ -112,39 +112,39 @@ Several oracle processes          RSS ~1-3 GiB   VSZ ~589 GiB
 ### Memory Terms
 - `MemTotal`
 Total physical RAM visible to Linux.
-- MemFree
+- `MemFree`
 RAM doing nothing right now. This is usually not the best health indicator.
-- MemAvailable
+- `MemAvailable`
 Estimated memory available for new workloads without serious pressure.
-- Used
+- `Used`
 Memory used by processes, kernel, cache, buffers, huge pages, and other consumers.
-- Buffers
+- `Buffers`
 Block device metadata cache.
-- Cached
+- `Cached`
 File contents cached in RAM. Usually reclaimable.
-- RSS
+- `RSS`
 Resident Set Size. Physical RAM currently mapped into a process.
-- VSZ
+- `VSZ`
 Virtual memory size. Address space mapped or reserved by a process. This is not the same as real RAM usage.
-- AnonPages
+- `AnonPages`
 Anonymous memory, usually process heap, stack, and private allocations.
-- Shmem
+- `Shmem`
 Shared memory and tmpfs-backed memory.
-- HugePages
+- `HugePages`
 Large memory pages, commonly used by databases.
-- Hugetlb
+- `Hugetlb`
 Memory reserved or used for HugeTLB huge pages.
-- Slab
+- `Slab`
 Kernel memory cache.
-- SReclaimable
+- `SReclaimable`
 Reclaimable slab memory.
-- SUnreclaim
+- `SUnreclaim`
 Kernel slab memory not easily reclaimable.
-- Swap
+- `Swap`
 Disk-backed memory overflow area.
-- Dirty
+- `Dirty`
 Modified memory pages waiting to be written to disk.
-- Writeback
+- `Writeback`
 Dirty pages currently being written to disk.
 #### Current Conclusion From Sample Node
 - The sample node is busy, but not under active memory pressure.
