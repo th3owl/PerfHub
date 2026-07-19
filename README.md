@@ -110,7 +110,7 @@ Several oracle processes          RSS ~1-3 GiB   VSZ ~589 GiB
 #### Important warning:
 - Do not blindly add Oracle process RSS values together. Shared memory can be visible in many processes, so summing RSS can overcount real physical memory usage.
 ### Memory Terms
-- ===MemTotal===
+- `MemTotal`
 Total physical RAM visible to Linux.
 - MemFree
 RAM doing nothing right now. This is usually not the best health indicator.
