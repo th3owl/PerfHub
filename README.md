@@ -17,15 +17,11 @@ The goal is to build an expert-level operational runbook using built-in Linux to
 
 - [Memory Investigation](memory/README.md)
 - [CPU Investigation](cpu/README.md)
-- [Process Lifecycle](process-lifecycle/README.md)
-
-## Current Status
-
-Memory investigation is in progress.
+- Process Lifecycle
 
 ## Built-In Linux Evidence Sources
 
-```
+```text
 /proc
 ps
 top
@@ -35,4 +31,11 @@ dmesg
 journalctl
 systemctl
 cgroup files
+OSWatcher / ExaWatcher if already present
+sar/sysstat if already present
 ```
+Current Status:
+
+Memory investigation: drafted
+CPU and load investigation: drafted
+Process lifecycle: pending
