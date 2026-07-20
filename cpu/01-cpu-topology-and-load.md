@@ -209,3 +209,51 @@ steal: 0%
 Conclusion:
 
 The node is not CPU saturated. It has many CPUs idle, low blocked tasks, and no I/O wait.
+
+## Step 3: Process State Distribution
+
+Command:
+
+```bash
+ps -eo stat= | awk '{s=substr($1,1,1); count[s]++} END {for (s in count) print s, count[s]}' | sort
+```
+
+Sample output:
+
+```text
+I 1259
+R 22
+S 3685
+```
+
+## Important States
+
+`R`
+
+Running or runnable. These tasks are either on CPU or waiting for CPU.
+
+`S`
+
+Interruptible sleep. Usually normal sleeping processes waiting for events.
+
+`D`
+
+Uninterruptible sleep. Often waiting on disk, storage, or kernel I/O. A pileup of `D` tasks can increase load average even when CPU is not busy.
+
+`I`
+
+Idle kernel thread.
+
+#### Interpretation
+
+There are only 22 runnable tasks on a 252 CPU node.
+
+There are no visible `D` state tasks in this sample.
+
+This confirms the node is not CPU saturated and does not have a blocked I/O task pileup.
+
+## Key Takeaway
+
+When load average looks high, validate whether the load is coming from runnable `R` tasks or blocked `D` tasks.
+
+In this case, the load average is invalid, and actual process states show no CPU or I/O queue pressure.
