@@ -198,3 +198,17 @@ iowait: 0%
 
 Conclusion:
 The node is not under real high-load pressure. The load average is invalid for diagnosis on this host.
+
+## Historical Evidence
+
+For historical load incidents, prefer timestamped sources:
+
+```text
+OSWatcher
+ExaWatcher
+sar
+vmstat logs
+top snapshots
+system messages
+```
+These can prove whether the spike was CPU saturation or I/O wait.
