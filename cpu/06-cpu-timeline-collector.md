@@ -18,6 +18,205 @@ which processes were involved
 whether recovery happened before or after application failure
 ```
 
+## Recommended OSWatcher Discovery Order
+
+1. Check common directories:
+
+```bash
+ls -ld /u01/logs/oswatcher /opt/oracle.ExaWatcher /opt/oracle.oswatcher /opt/oswbb /u01/app/oracle/tfa/repository 2>/dev/null
+```
+
+2. Check running watcher process:
+
+```bash
+ps -ef | grep -Ei 'oswatch|oswbb|exawatch|exawatcher' | grep -v grep
+```
+
+3. If a watcher process is running, use the output directory shown in the command line.
+
+4. Search inside that directory:
+
+```bash
+find /u01/logs/oswatcher -type f | head -50
+```
+
+5. Narrow to expected watcher files:
+
+```bash
+find /u01/logs/oswatcher -type f \( -iname '*vmstat*' -o -iname '*top*' -o -iname '*iostat*' -o -iname '*ps*' \) | head -50
+```
+
+6. Use broad filesystem `find` only if the location is still unknown:
+
+```bash
+find /opt /u01 /var /tmp -type d \( -iname '*oswatch*' -o -iname '*oswbb*' -o -iname '*exawatch*' -o -iname '*exawatcher*' \) 2>/dev/null
+```
+
+## Example: OSWatcher Discovery On NODE-OSW-1
+
+### Check For OSWatcher Directory
+
+Command:
+
+```bash
+find /opt /u01 /var /tmp -type d \( -iname '*oswatch*' -o -iname '*oswbb*' -o -iname '*exawatch*' -o -iname '*exawatcher*' \) 2>/dev/null
+```
+
+Output:
+
+```text
+/u01/logs/oswatcher
+```
+
+Interpretation:
+
+OSWatcher data directory exists at:
+
+```text
+/u01/logs/oswatcher
+```
+
+### Check Whether OSWatcher Is Running
+
+Command:
+
+```bash
+ps -ef | grep -Ei 'oswatch|oswbb|exawatch|exawatcher' | grep -v grep
+```
+
+Output:
+
+```text
+root 2789 1 0 Jul01 ? 00:07:48 /bin/sh /usr/sbin/OSWatcher 30 168 NONE /u01/logs/oswatcher
+```
+
+Interpretation:
+
+OSWatcher is running.
+
+The command line shows:
+
+```text
+/usr/sbin/OSWatcher 30 168 NONE /u01/logs/oswatcher
+```
+
+Meaning:
+
+```text
+sample interval: 30 seconds
+retention/count argument: 168
+output location: /u01/logs/oswatcher
+```
+
+So this node is collecting OSWatcher samples every 30 seconds.
+
+### Common Location Check
+
+Command:
+
+```bash
+ls -ld /opt/oracle.ExaWatcher /opt/oracle.oswatcher /opt/oswbb /u01/app/oracle/tfa/repository 2>/dev/null
+```
+
+Output:
+
+```text
+no output
+```
+
+Interpretation:
+
+The common ExaWatcher/OSWatcher/TFA locations checked here do not exist or are not readable on this node.
+
+However, OSWatcher still exists in a custom/current location:
+
+```text
+/u01/logs/oswatcher
+```
+
+### Broad File Search Caveat
+
+Command:
+
+```bash
+find /opt /u01 /var /tmp -type f \( -iname '*osw*.tar*' -o -iname '*osw*.gz' -o -iname '*osw*.dat' -o -iname '*vmstat*' -o -iname '*top*' \) 2>/dev/null | head -5
+```
+
+Output:
+
+```text
+/opt/impairment_agent/bin/impairment_agent.x86_64/_internal/gevent-25.5.1.dist-info/top_level.txt
+/opt/impairment_agent/bin/impairment_agent.x86_64/_internal/h2-4.3.0.dist-info/top_level.txt
+/opt/impairment_agent/bin/impairment_agent.x86_64/_internal/markupsafe-3.0.3.dist-info/top_level.txt
+/opt/impairment_agent/bin/impairment_agent.x86_64/_internal/zope_event-6.2.dist-info/top_level.txt
+/opt/impairment_agent/bin/impairment_agent.x86_64/_internal/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/top_level.txt
+```
+
+Interpretation:
+
+This broad search produced false positives because files named `top_level.txt` matched `*top*`.
+
+Better approach after finding the OSWatcher directory:
+
+```bash
+find /u01/logs/oswatcher -type f | head -50
+```
+
+Then narrow to expected files:
+
+```bash
+find /u01/logs/oswatcher -type f \( -iname '*vmstat*' -o -iname '*top*' -o -iname '*iostat*' -o -iname '*ps*' \) | head -50
+```
+
+### Discovery Key Takeaway
+
+When OSWatcher is running, prefer the configured output directory from the process command line.
+
+In this case:
+
+```text
+/u01/logs/oswatcher
+```
+
+is more reliable than a broad filesystem search.
+
+## What To Extract From OSWatcher
+
+For suspected high load, extract data around the incident window.
+
+Recommended window:
+
+```text
+3 hours before incident
+1 hour after incident
+```
+
+Useful watcher files:
+
+```text
+vmstat
+top
+iostat
+ps
+netstat
+messages
+```
+
+Minimum fields to capture:
+
+```text
+timestamp
+load average
+vmstat r
+vmstat b
+vmstat us/sy/id/wa/st
+top CPU summary
+top process states
+D-state processes
+iostat await/util if available
+OS messages around the same time
+```
+
 ## Case Example: OSWatcher Proves High Load Was I/O Wait
 
 In one incident, live CPU commands alone would not have been enough. OSWatcher provided timestamped evidence showing why load average spiked.
