@@ -77,3 +77,135 @@ Kernel accounting issues
 Stale or invalid values
 ```
 Do not diagnose CPU pressure from load average alone.
+
+## Concept: `vmstat` CPU View
+
+Command:
+
+```bash
+vmstat 1 5
+```
+
+Example:
+
+```text
+procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+19  0  12884 39721152 4612316 644228608    0    0    15     2    0    0  4  1 95  0  0
+20  0  12884 39835304 4611944 644394496    0    0     0   100 292130 259563  6  3 90  0  0
+```
+
+## Important Columns
+
+`r`
+
+Run queue. Number of runnable tasks. These are tasks either running on CPU or waiting for CPU.
+
+Compare `r` with CPU count.
+
+```text
+r below CPU count  = usually okay
+r near CPU count   = CPU is busy
+r above CPU count  = possible CPU queueing
+r much above count = likely CPU saturation
+```
+
+In this case:
+
+```text
+r = 19-24
+CPU count = 252
+```
+
+So runnable tasks are far below total CPU capacity.
+
+`b`
+
+Blocked tasks. Usually tasks waiting in uninterruptible sleep, often for disk or storage I/O.
+
+In this case:
+
+```text
+b = 0-1
+```
+
+So there is no major blocked-task pressure.
+
+`us`
+
+User CPU percentage. CPU time spent running application/user-space code.
+
+Example:
+
+```text
+us = 4-6%
+```
+
+This means application CPU usage is low.
+
+`sy`
+
+System CPU percentage. CPU time spent in kernel code.
+
+Example:
+
+```text
+sy = 1-3%
+```
+
+This means kernel CPU usage is low.
+
+`id`
+
+Idle CPU percentage. CPU time not being used.
+
+Example:
+
+```text
+id = 90-95%
+```
+
+This means the node is mostly idle.
+
+`wa`
+
+I/O wait. CPU time waiting for I/O completion.
+
+Example:
+
+```text
+wa = 0%
+```
+
+This means CPU is not waiting on storage in this sample.
+
+`st`
+
+Steal time. Time stolen by the hypervisor from this VM.
+
+Example:
+
+```text
+st = 0%
+```
+
+This means there is no visible hypervisor CPU steal pressure.
+
+## Interpretation For This Case
+
+The load average is invalid, but `vmstat` shows the actual node state:
+
+```text
+CPU count: 252
+run queue: 19-24
+blocked: 0-1
+user CPU: 4-6%
+system CPU: 1-3%
+idle CPU: 90-95%
+iowait: 0%
+steal: 0%
+```
+
+Conclusion:
+
+The node is not CPU saturated. It has many CPUs idle, low blocked tasks, and no I/O wait.
