@@ -50,3 +50,49 @@ run queue
 blocked tasks
 iowait
 ```
+
+## Step 2: CPU Usage By OS User
+
+Command:
+
+```bash
+ps -eo user=,pcpu= | awk '{cpu[$1]+=$2} END {for (u in cpu) printf "%-20s %.2f\n", u, cpu[u]}' | sort -k2 -nr
+```
+
+Sample output:
+
+```text
+oracle               2440.30
+exawatch               95.70
+root                   47.00
+grid                   16.60
+dbmsvc                 13.80
+```
+
+## Interpretation
+
+In `ps`, `%CPU` is roughly relative to one CPU.
+
+So:
+
+```text
+oracle 2440% = about 24.4 CPU cores
+```
+
+On a 252 CPU node:
+
+```text
+24.4 / 252 = about 9.7% of total CPU capacity
+```
+
+This confirms Oracle owns most of the active CPU usage, but the node is not saturated.
+
+## Key Takeaway
+
+CPU by user is useful for ownership:
+
+```text
+Who is consuming CPU?
+```
+
+But it must be interpreted against total CPU count and live CPU idle percentage.
