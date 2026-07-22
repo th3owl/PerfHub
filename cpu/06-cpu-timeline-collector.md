@@ -388,3 +388,60 @@ Then correlate with:
 - application/database logs
 #### Key Takeaway
 Use sar when the CPU or load spike happened in the past and live commands now look normal.
+
+## Example: Historical `sar` Data For CPU And Load
+
+Commands:
+
+```bash
+sar -q 1 3
+sar -u 1 3
+sar -w 1 3
+```
+Sample data:
+```
+sar -q 1 3
+Linux 5.15.0-308.179.6.16.el8uek.x86_64 (xxx) 	07/22/26 	_x86_64_	(380 CPU)
+
+09:26:22      runq-sz  plist-sz   ldavg-1   ldavg-5  ldavg-15   blocked
+09:26:25           22     10644     16.63     18.66     23.28         0
+09:26:28           16     10639     16.63     18.66     23.28         1
+09:26:31           15     10636     16.26     18.55     23.22         1
+Average:           18     10640     16.51     18.62     23.26         1
+
+sar -u 1 3
+Linux 5.15.0-308.179.6.16.el8uek.x86_64 (xxx) 	07/22/26 	_x86_64_	(380 CPU)
+
+09:26:42        CPU     %user     %nice   %system   %iowait    %steal     %idle
+09:26:43        all      6.03      0.00      0.65      0.08      0.00     93.23
+09:26:44        all      4.77      0.01      0.56      0.16      0.04     94.46
+09:26:45        all      6.96      0.01      1.09      0.18      0.00     91.77
+Average:        all      5.92      0.01      0.77      0.14      0.01     93.16
+
+sar -w 1 3
+Linux 5.15.0-308.179.6.16.el8uek.x86_64 (xxx) 	07/22/26 	_x86_64_	(380 CPU)
+
+09:26:50       proc/s   cswch/s
+09:26:51        16.00 360365.00
+09:26:52        57.00 361474.00
+09:26:53        22.00 293128.00
+Average:        31.67 338322.33
+```
+Sample interpretation:
+```
+Average runq-sz : 18
+Average blocked : 1
+Load average    : 16.51 / 18.62 / 23.26
+Average %idle   : 93.16
+Average %user   : 5.92
+Average %system : 0.77
+Average %iowait : 0.14
+```
+On a 380 CPU node:
+- run queue 18 is low relative to CPU capacity
+- idle CPU is very high
+- iowait is negligible
+#### Conclusion:
+- The node is not CPU saturated.
+- Historical load values must be interpreted relative to CPU count.
+- This is a healthy CPU profile for a large node.
