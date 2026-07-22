@@ -144,3 +144,68 @@ done >> /tmp/memory_timeline.log
 ## Key Takeaway
 
 For future incidents, start the collector early. It turns memory analysis from a snapshot exercise into a timeline investigation.
+
+## Historical `sar` Data For Memory
+
+If `sar` is already installed and collecting data, it is one of the most useful sources for historical memory analysis.
+
+### Commands
+
+```bash
+sar -r
+sar -S
+sar -W
+```
+Meaning
+```
+sar -r = physical memory usage history
+sar -S = swap usage history
+sar -W = swap page-in/page-out history
+```
+What To Check
+`sar -r`
+Use this to see:
+```
+when memory usage increased
+when available/free memory dropped
+whether the spike was sustained or short-lived
+```
+`sar -S`
+Use this to see:
+```
+when swap usage increased
+whether swap stayed flat or kept growing
+```
+`sar -W`
+Use this to see:
+```
+whether active swap-in or swap-out was happening
+whether the node was under memory reclaim pressure
+```
+#### Interpretation
+```
+high memory use with stable swap
+  memory may be busy but not pressured
+
+rising swap use with non-zero page-in/page-out
+  memory pressure is more likely
+
+memory spike followed by recovery
+  transient workload or reclaim event
+
+sustained memory growth
+  possible leak, workload growth, or shared memory expansion
+```
+Example Workflow
+```
+sar -r
+sar -S
+sar -W
+```
+#### Then correlate with:
+- dmesg OOM timestamps
+- application logs
+- OSWatcher/ExaWatcher
+- current /proc/meminfo state
+#### Key Takeaway
+Use sar when the memory issue happened in the past and live commands now look normal.
