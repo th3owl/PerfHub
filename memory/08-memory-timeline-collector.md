@@ -209,3 +209,55 @@ sar -W
 - current /proc/meminfo state
 #### Key Takeaway
 Use sar when the memory issue happened in the past and live commands now look normal.
+
+## Example: Historical `sar` Data For Memory
+
+Commands:
+
+```bash
+sar -r 1 3
+sar -S 1 3
+sar -W 1 3
+```
+Sample data:
+```
+sar -r 1 3
+Linux 5.15.0-308.179.6.16.el8uek.x86_64 (xxx 	07/22/26 	_x86_64_	(380 CPU)
+
+09:20:34    kbmemfree   kbavail kbmemused  %memused kbbuffers  kbcached  kbcommit   %commit  kbactive   kbinact   kbdirty
+09:20:35    270684416 522681884 1174651532     81.27   2049792 329357392 309139512     21.13 104694628 413761652     76392
+09:20:36    270539160 522555700 1174796788     81.28   2049792 329376208 309181292     21.14 104694568 413807984     91480
+09:20:37    270744400 522780248 1174591548     81.27   2049792 329395312 309041488     21.13 104694516 413712736    107520
+Average:    270655992 522672611 1174679956     81.27   2049792 329376304 309120764     21.13 104694571 413760791     91797
+
+sar -S 1 3
+Linux 5.15.0-308.179.6.16.el8uek.x86_64 (xxx) 	07/22/26 	_x86_64_	(380 CPU)
+
+09:20:50    kbswpfree kbswpused  %swpused  kbswpcad   %swpcad
+09:20:51     17365748    128260      0.73      5460      4.26
+09:20:52     17365748    128260      0.73      5460      4.26
+09:20:53     17365748    128260      0.73      5460      4.26
+Average:     17365748    128260      0.73      5460      4.26
+
+sar -W 1 3
+Linux 5.15.0-308.179.6.16.el8uek.x86_64 (xxx) 	07/22/26 	_x86_64_	(380 CPU)
+
+09:21:06     pswpin/s pswpout/s
+09:21:07         0.00      0.00
+09:21:08         0.00      0.00
+09:21:09         0.00      0.00
+Average:         0.00      0.00
+```
+Sample interpretation:
+```
+Average kbavail  : ~522672611 KB (~498.5 GiB)
+Average %memused : 81.27%
+Average %swpused : 0.73%
+Average pswpin/s : 0.00
+Average pswpout/s: 0.00
+```
+Conclusion:
+- Memory is heavily utilized but not under active pressure.
+- Available memory remains high.
+- Swap usage is tiny.
+- There is no active swap-in or swap-out.
