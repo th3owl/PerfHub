@@ -320,3 +320,71 @@ swap pressure
 ```
 
 A single live snapshot after recovery may miss the spike completely.
+
+## Historical `sar` Data For CPU And Load
+
+If `sar` is already installed and collecting data, it is one of the most useful sources for historical CPU and load analysis.
+
+### Commands
+
+```bash
+sar -q
+sar -u
+sar -w
+```
+Meaning
+```
+sar -q = load average and run queue history
+sar -u = CPU utilization history
+sar -w = task creation and context switch history
+```
+What To Check
+`sar -q`
+Use this to see:
+```
+when load average increased
+when run queue increased
+whether blocked processes increased
+```
+`sar -u`
+Use this to see:
+```
+whether CPU was busy in user space
+whether system CPU increased
+whether idle CPU dropped
+whether iowait was high
+```
+`sar -w`
+Use this to see:
+```
+whether context switches increased
+whether process creation spiked
+```
+#### Interpretation
+```
+high load with high idle CPU
+  load may be misleading, blocked, or I/O related
+
+high load with low idle CPU and high user/system CPU
+  CPU saturation is more likely
+
+high load with high iowait
+  load is likely storage or I/O driven
+
+run queue rising above CPU capacity
+  CPU queueing is likely
+```
+Example Workflow
+```
+sar -q
+sar -u
+sar -w
+```
+Then correlate with:
+- vmstat
+- mpstat
+- process state distribution
+- OSWatcher/ExaWatcher
+- application/database logs
+#### Key Takeaway
+Use sar when the CPU or load spike happened in the past and live commands now look normal.
