@@ -94,7 +94,7 @@ Questions answered:
 
 ## Private interface and UDP evidence
 
-### Node `ce1pod-gb82p1`
+### Node `db1`
 
 Command outputs showed:
 
@@ -115,7 +115,7 @@ Command outputs showed:
 - `receive buffer errors` did not increase
 - `send buffer errors` increased only slightly: `1596743 -> 1596748`
 
-### Node `ce1pod-gb82p3`
+### Node `db3`
 
 Command outputs showed:
 
@@ -136,7 +136,7 @@ Command outputs showed:
 - `receive buffer errors` did not increase
 - `send buffer errors` did not increase
 
-### Node `ce1pod-gb82p4`
+### Node `db4`
 
 Command outputs showed:
 
