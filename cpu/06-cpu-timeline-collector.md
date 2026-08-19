@@ -216,8 +216,9 @@ D-state processes
 iostat await/util if available
 OS messages around the same time
 ```
-
+----------------------------------------------------------------------------
 ## Case Example: OSWatcher Proves High Load Was I/O Wait
+----------------------------------------------------------------------------
 
 In one incident, live CPU commands alone would not have been enough. OSWatcher provided timestamped evidence showing why load average spiked.
 
@@ -445,8 +446,9 @@ On a 380 CPU node:
 - The node is not CPU saturated.
 - Historical load values must be interpreted relative to CPU count.
 - This is a healthy CPU profile for a large node.
-
+----------------------------------------------------------------------------
 ## Case Example: Scheduler And Parallel Query Caused True CPU Saturation
+----------------------------------------------------------------------------
 
 This incident shows a high-load case where the node was CPU-bound, not I/O-bound.
 
