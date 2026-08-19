@@ -445,3 +445,348 @@ On a 380 CPU node:
 - The node is not CPU saturated.
 - Historical load values must be interpreted relative to CPU count.
 - This is a healthy CPU profile for a large node.
+
+## Case Example: Scheduler And Parallel Query Caused True CPU Saturation
+
+This incident shows a high-load case where the node was CPU-bound, not I/O-bound.
+
+### Host And Time
+
+- Host: `node4`
+
+### Command 1: Load Average
+
+`uptime`
+
+Output:
+```
+[root@enode4 ~]# uptime
+ 05:16:15 up 31 days, 16:38,  2 users,  load average: 172.83, 147.21, 128.94
+```
+Interpretation:
+- Load average was extremely high.
+- On its own this does not prove CPU saturation, so more evidence was needed.
+- 
+### Command 2: Kernel Load View
+`cat /proc/loadavg`
+
+Output:
+```
+[root@node4 ~]# cat /proc/loadavg
+164.59 148.52 130.17 141/6221 268499
+```
+Interpretation:
+- The instantaneous runnable/active task view was very high.
+- 141/6221 showed many tasks in the system, with a large active runnable component.
+  
+### Command 3: CPU Count
+`nproc`
+
+Output:
+```
+[root@node4 ~]# nproc
+100
+```
+Interpretation:
+- The host had 100 CPUs.
+- A load average around 173 on a 100 CPU host is suspicious, but we still need CPU-state evidence to know whether this was CPU, I/O, or blocked work.
+
+### Command 4: Live Scheduler / Run Queue View
+
+`vmstat 1 5`
+Output:
+```
+[root@node4 ~]# vmstat 1 5
+procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+141  0  25088 18481304 909916 239035920    0    0    27    15    0    0 16  4 80  0  0
+
+156  0  25088 18846392 909916 239035968    0    0     0   252 436557 190965 83 16  1  0  0
+158  0  25088 19683796 909916 239036000    0    0     0   284 450536 224927 82 17  1  0  0
+161  0  25088 20070412 909916 239036048    0    0     0   204 410775 170683 83 16  1  0  0
+142  0  25088 20382780 909916 239036128    0    0     0   684 411589 175295 83 16  1  0  0
+```
+Interpretation:
+- r=141-161 was far above the CPU count pressure threshold.
+- b=0 showed this was not a blocked-I/O style event.
+- us=82-83, sy=16-17, id=1, wa=0 is the classic pattern of CPU saturation.
+- There was no meaningful I/O wait component.
+- 
+### Command 5: CPU Breakdown
+
+`mpstat 1 5`
+Output:
+```
+[root@node4 ~]# mpstat 1 5
+Linux 5.4.17-2136.322.6.5.el8uek.x86_64 (node4) 	08/19/2026 	_x86_64_	(100 CPU)
+
+05:17:02 AM  CPU    %usr   %nice    %sys %iowait    %irq   %soft  %steal  %guest  %gnice   %idle
+05:17:03 AM  all   83.38    0.25    7.09    0.00    5.22    3.09    0.26    0.00    0.00    0.71
+05:17:04 AM  all   81.69    0.13    7.64    0.00    5.16    3.64    0.16    0.00    0.00    1.58
+05:17:05 AM  all   79.30    0.09    9.63    0.00    5.13    3.98    0.20    0.00    0.00    1.67
+05:17:06 AM  all   78.43    0.12   10.23    0.00    5.08    3.93    0.21    0.00    0.00    2.00
+05:17:07 AM  all   78.69    0.08   10.28    0.01    5.24    4.09    0.18    0.00    0.00    1.43
+Average:     all   80.30    0.13    8.97    0.00    5.17    3.75    0.20    0.00    0.00    1.48
+```
+Interpretation:
+- CPU was almost fully consumed.
+- %idle averaged only 1.48.
+- %iowait was effectively 0.00.
+- This strongly proved that the high load was caused by CPU demand, not storage wait.
+
+### Command 6: Process State Distribution
+```
+ps -eo stat= | awk '{s=substr($1,1,1); count[s]++} END {for (s in count) print s, count[s]}' | sort
+```
+Output:
+```
+[root@node4 ~]# ps -eo stat= | awk '{s=substr($1,1,1); count[s]++} END {for (s in count) print s, count[s]}' | sort
+D 2
+I 2017
+R 149
+S 2896
+```
+Interpretation:
+- R 149 matched the high run queue.
+- Only D 2 processes existed, so this was not a D-state pileup or storage-stall case.
+- The load was coming from runnable work competing for CPU.
+
+### Command 7: Top CPU Consumers
+```
+ps -eo pid,ppid,user,stat,comm,pcpu,pmem,rss,vsz,etime,args --sort=-pcpu | head -40
+```
+Output:
+```
+[root@node4 ~]# ps -eo pid,ppid,user,stat,comm,pcpu,pmem,rss,vsz,etime,args --sort=-pcpu | head -40
+   PID   PPID USER     STAT COMMAND         %CPU %MEM   RSS    VSZ     ELAPSED COMMAND
+210885      1 oracle   Rs   ora_j00e_em31po 89.7  0.0 216796 318874856 3-05:48:18 ora_j00e_em31pod6
+217374      1 oracle   Rs   ora_j00n_em31po 74.7  0.0 327728 319283500 06:50:40 ora_j00n_em31pod6
+207333      1 oracle   Rs   ora_j00z_em31po 48.2  0.0 255068 319230380   20:41 ora_j00z_em31pod6
+190729      1 oracle   Rs   ora_j00a_em31po 47.8  0.0 414068 319349892   26:09 ora_j00a_em31pod6
+273035      1 oracle   Rs   oracle_273035_e 39.6  0.0 138888 319089996   00:04 oracleem31pod6 (LOCAL=NO)
+272762      1 oracle   Rs   oracle_272762_e 40.5  0.0 140148 319090264   00:12 oracleem31pod6 (LOCAL=NO)
+108217      1 oracle   Rs   ora_j007_em31po 38.8  0.0 415356 319547256   51:54 ora_j007_em31pod6
+231834      1 oracle   Ss   ora_j00f_em31po 37.3  0.0 319132 319329032   13:16 ora_j00f_em31pod6
+212582      1 oracle   Rs   ora_j004_em31po 35.4  0.0 423544 319363840   18:59 ora_j004_em31pod6
+231844      1 oracle   Rs   ora_j00o_em31po 34.9  0.0 360440 319479936   13:16 ora_j00o_em31pod6
+154309      1 oracle   Rs   oracle_154309_e 34.0  0.1 998720 320092248   37:26 oracleem31pod6 (LOCAL=NO)
+161915      1 oracle   Rs   oracle_161915_e 33.7  0.0 535904 319494424   34:59 oracleem31pod6 (LOCAL=NO)
+215152      1 oracle   Rs   oracle_215152_e 33.4  0.0 499928 319624932   18:17 oracleem31pod6 (LOCAL=NO)
+260762      1 oracle   Rs   oracle_260762_e 33.4  0.0 207532 319181928   04:02 oracleem31pod6 (LOCAL=NO)
+154676      1 oracle   Rs   oracle_154676_e 33.2  0.1 947796 320060344   37:12 oracleem31pod6 (LOCAL=NO)
+157099      1 oracle   Rs   oracle_157099_e 32.9  0.1 947480 320060340   36:41 oracleem31pod6 (LOCAL=NO)
+166939      1 oracle   Rs   ora_j002_em31po 32.9  0.0 384788 319349804   33:19 ora_j002_em31pod6
+155839      1 oracle   Ss   oracle_155839_e 32.0  0.1 948384 320060344   36:57 oracleem31pod6 (LOCAL=NO)
+266674      1 oracle   Rs   oracle_266674_e 32.0  0.0 161036 319116488   01:48 oracleem31pod6 (LOCAL=NO)
+273063      1 oracle   Rs   oracle_273063_e 31.6  0.0 138052 319089868   00:02 oracleem31pod6 (LOCAL=NO)
+214807      1 oracle   Ss   ora_j000_em31po 29.4  0.0 447452 319431864   18:19 ora_j000_em31pod6
+284241      1 oracle   Ss   ora_mrm_em31pod 29.3  0.0 83016 316436788 3-21:20:13 ora_mrm_em31pod6
+ 61662      1 oracle   Rs   ora_j00y_em31po 27.5  0.0 377188 319339420 01:08:18 ora_j00y_em31pod6
+284279      1 oracle   Ssl  ora_scmn_em31po 26.9  0.0 366332 319366256 3-21:20:13 ora_lms1_em31pod6
+119459      1 oracle   Rs   ora_j00b_em31po 26.7  0.0 201888 319148928   48:19 ora_j00b_em31pod6
+214980      1 oracle   Ss   ora_j01h_em31po 25.9  0.0 230152 319182852   18:18 ora_j01h_em31pod6
+284774      1 oracle   Ss   ora_ppa7_em31po 25.6  0.1 885280 319715360 3-21:20:07 ora_ppa7_em31pod6
+211552      1 oracle   Ss   ora_j00i_em31po 24.9  0.0 258188 319270680   19:21 ora_j00i_em31pod6
+273079      1 oracle   Rs   oracle_273079_e 31.0  0.0 125064 319091748   00:01 oracleem31pod6 (LOCAL=NO)
+367772      1 oracle   Ss   ora_j012_em31po 23.4  0.0 217768 319139364 01:38:18 ora_j012_em31pod6
+284414      1 oracle   Ss   ora_lgwr_em31po 21.7  0.0 113604 316469544 3-21:20:12 ora_lgwr_em31pod6
+ 98327      1 oracle   Rs   ora_j00q_em31po 21.5  0.0 226216 319295964   55:40 ora_j00q_em31pod6
+272865      1 oracle   Ss   oracle_272865_e 20.7  0.0 146764 319102952   00:09 oracleem31pod6 (LOCAL=NO)
+284281      1 oracle   Ssl  ora_scmn_em31po 21.0  0.0 361092 319363184 3-21:20:13 ora_lms2_em31pod6
+284283      1 oracle   Ssl  ora_scmn_em31po 21.0  0.0 363600 319363248 3-21:20:13 ora_lms3_em31pod6
+109411      1 oracle   Ss   ora_j00g_em31po 20.9  0.0 252288 319170360   51:40 ora_j00g_em31pod6
+284277      1 oracle   Ssl  ora_scmn_em31po 20.9  0.0 362504 319363248 3-21:20:13 ora_lms0_em31pod6
+284285      1 oracle   Ssl  ora_scmn_em31po 20.8  0.0 368996 319366256 3-21:20:13 ora_lms4_em31pod6
+248474      1 oracle   Ss   oracle_248474_e 20.5  0.0 156524 319110064   08:16 oracleem31pod6 (LOCAL=NO)
+```
+Interpretation:
+- CPU consumption was dominated by Oracle processes.
+- Many ora_j... job processes were active.
+- Many oracle...(LOCAL=NO) foregrounds were also active.
+- This immediately pointed toward database workload rather than an OS daemon or kernel issue.
+
+Database Correlation
+- The following database evidence was collected during the same incident.
+  
+### Command 8: Active Waits By Instance And PDB
+```
+select inst_id, con_id, event, wait_class, count(*)
+from gv$session
+where status = 'ACTIVE'
+group by inst_id, con_id, event, wait_class
+order by 1, 5 desc;
+```
+Relevant findings:
+```
+INST_ID CON_ID EVENT                         WAIT_CLASS    COUNT(*)
+------- ------ ----------------------------  ------------  --------
+6       193    resmgr:cpu quantum           Scheduler     38
+6       193    PX Deq: Table Q Normal       Idle          32
+6       193    PX Deq: Execution Msg        Idle          31
+6       193    cell smart table scan        User I/O      27
+```
+Interpretation:
+- Instance 6 was the hotspot.
+- CON_ID 193 was the main workload container.
+- resmgr:cpu quantum strongly indicated CPU contention.
+- PX dequeue waits showed heavy parallel execution activity.
+
+### Command 9: Map PDB Name
+```
+select con_id, name
+from v$containers
+where con_id in (117,155,174,176,193);
+```
+Relevant output:
+```
+CON_ID NAME
+------ ------------------------------
+193    STOREDB
+```
+Interpretation:
+- The busiest PDB in this incident was STOREDB.
+
+### Command 10: SQL / Module / Program Distribution
+```
+select inst_id, sql_id, module, program, count(*)
+from gv$session
+where status = 'ACTIVE'
+group by inst_id, sql_id, module, program
+order by 5 desc;
+```
+Interpretation:
+- The active workload was heavily associated with scheduler-driven and parallelized database activity.
+- Repeated Oracle PX worker programs and scheduler-linked sessions were present.
+
+### Command 11: Parallel Execution Fan-Out
+```
+select degree, req_degree, server_set, count(*)
+from v$px_session
+group by degree, req_degree, server_set
+order by 4 desc;
+```
+Output:
+```
+     DEGREE      REQ_DEGREE      SERVER_SET        COUNT(*)
+----------- --------------- --------------- ---------------
+        225             450               1              64
+        225             450               2              64
+        450             450               1              64
+          8               8               1               9
+         35              70               2               8
+         35              70               1               8
+         43              86               2               5
+         43              86               1               5
+                                                          4
+```
+Interpretation:
+- This was very large PX fan-out.
+- The system was running highly parallel database work.
+- That level of parallelism can easily saturate a 100 CPU host.
+
+### Command 12: Running Scheduler Jobs In The Hot PDB
+```
+select owner, job_name, session_id, running_instance, elapsed_time, cpu_used
+from cdb_scheduler_running_jobs
+where con_id = 193;
+```
+Output:
+```
+OWNER                JOB_NAME                                 SESSION_ID RUNNING_INSTANCE ELAPSED_TIME              CPU_USED
+-------------------- ---------------------------------------- ---------- ---------------- ------------------------- -------------------------
+ADMIN                STATS_JOB_1                                   52918                6 +000 00:20:42.68        +004 13:34:55.91
+ADMIN                STATS_JOB_2                                   13849                6 +000 06:29:59.44        +000 00:00:01.25
+```
+Interpretation:
+- Multiple scheduler jobs were active in the same PDB.
+- STATS_JOB_1 stood out as a major contributor.
+- The CPU saturation was not caused by one random foreground session. It aligned with scheduled background processing.
+
+### Command 13: Job Definition And Schedule
+```
+select owner, job_name, enabled, state, start_date, last_start_date, repeat_interval
+from cdb_scheduler_jobs
+where job_name = 'STATS_JOB_1'
+and con_id = 193;
+```
+Output:
+```
+OWNER
+--------------------------------------------------------------------------------------------------------------------------------
+JOB_NAME                                                         ENABL STATE
+-------------------------------------------------------------------------------------------------------------------------------- ----- ---------------
+START_DATE                                    LAST_START_DATE
+--------------------------------------------------------------------------- ---------------------------------------------------------------------------
+REPEAT_INTERVAL
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ADMIN
+STATS_JOB_1                                                      TRUE  SCHEDULED
+14-JUL-26 11.10.42.765624 AM +00:00               19-AUG-26 05.10.42.433622 AM +00:00
+FREQ=HOURLY;BYDAY=MON,TUE,WED,THU,FRI,SAT,SUN
+```
+Interpretation:
+- This job was not newly introduced on the incident day.
+- It had existed since 2026-07-14.
+- It was an hourly recurring job.
+- Its most recent run started at 2026-08-19 05:10:42 UTC, aligning with the incident window.
+
+### Command 14: SQL Text For Main Workload
+```
+select sql_id, sql_text
+from v$sql
+where sql_id in ('ab123cd456','ef123gh456');
+```
+Output:
+```
+SQL_ID
+-------------
+SQL_TEXT
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ab123cd456
+DELETE FROM USAGE_DETAILS TARGET WHERE EXISTS ( SELECT 1 FROM USAGE_DETAILS_DELAYED_STAGE STAGE WHERE STAGE.TIMEID = TARGET.TIMEID ) AND ROWNUM <= 50000
+
+ef123gh456
+/* SQL Analyze(1) */ select /*+  full(t)    no_parallel(t) no_parallel_index(t) dbms_stats cursor_sharing_exact use_weak_name_resl dynamic_sampling(0) no_monitoring xmlindex_sel_idx_tbl opt_param('optimizer_inmemory_aware' 'false') no_substrb_pad bypass_recursive_check */ ...
+```
+Interpretation:
+- The workload included maintenance/statistics-style work and usage-fact processing.
+- This matched the scheduler-job pattern already visible in the running job list.
+
+## Final Interpretation
+This was a true CPU saturation incident.
+The evidence chain was:
+```
+hourly scheduler workload in PDB STOREDB
+-> multiple active scheduler jobs
+-> large PX fan-out
+-> many runnable Oracle processes
+-> run queue 141-161 on a 100 CPU host
+-> idle CPU ~1-2%
+-> iowait ~0%
+-> resmgr:cpu quantum waits
+-> load average rose to ~173
+```
+## Why This Was Not A Storage-Issue Load Spike
+This case did not match the pattern of storage wait:
+- b=0 in vmstat
+- only D 2 processes
+- %iowait was effectively zero
+- %idle was almost zero
+- run queue was extremely high
+- Oracle sessions showed CPU scheduling pressure with resmgr:cpu quantum
+
+That combination proves CPU oversubscription, not blocked I/O.
+### Key Takeaway
+High load average does not always mean disk trouble.
+In this case, the deciding signals were:
+```
+load average ~173 on 100 CPUs
+run queue 141-161
+idle CPU ~1.48%
+iowait ~0%
+149 runnable tasks
+Oracle scheduler jobs active
+very large PX fan-out
+resmgr:cpu quantum waits
+```
+This is a clean example of true CPU saturation caused by scheduled, highly parallel Oracle workload.
